@@ -37,6 +37,7 @@ DEFAULT_SETTINGS = {'FLASKS3_USE_HTTPS': True,
                     'FLASKS3_ACTIVE': True,
                     'FLASKS3_DEBUG': False,
                     'FLASKS3_BUCKET_DOMAIN': 's3.amazonaws.com',
+                    'FLASKS3_REGION': 'us-east-1',
                     'FLASKS3_CDN_DOMAIN': '',
                     'FLASKS3_USE_CACHE_CONTROL': False,
                     'FLASKS3_HEADERS': {},
@@ -107,18 +108,19 @@ def _get_bucket_name(**values):
     values.pop('_anchor', None)  # anchor as well
     values.pop('_method', None)  # method too
 
-    url_style = get_setting('FLASKS3_URL_STYLE', app)
-    if url_style == 'host':
-        url_format = '{bucket_name}.{bucket_domain}'
-    elif url_style == 'path':
-        url_format = '{bucket_domain}/{bucket_name}'
-    else:
-        raise ValueError('Invalid S3 URL style: "{}"'.format(url_style))
-
     if get_setting('FLASKS3_CDN_DOMAIN', app):
         bucket_path = '{}'.format(get_setting('FLASKS3_CDN_DOMAIN', app))
 
     else:
+
+        url_style = get_setting('FLASKS3_URL_STYLE', app)
+        if url_style == 'host':
+            url_format = '{bucket_name}.{bucket_domain}'
+        elif url_style == 'path':
+            url_format = '{bucket_domain}/{bucket_name}'
+        else:
+            raise ValueError('Invalid S3 URL style: "{}"'.format(url_style))
+
         bucket_path = url_format.format(
             bucket_name=get_setting('FLASKS3_BUCKET_NAME', app),
             bucket_domain=get_setting('FLASKS3_BUCKET_DOMAIN', app),
@@ -280,8 +282,7 @@ def _write_files(s3, app, static_url_loc, static_folder, files, bucket,
                 if mimetype:
                     h["content-type"] = mimetype
                 else:
-                    logger.warn("Unable to detect mimetype for %s" %
-                                file_path)
+                    logger.warning("Unable to detect mimetype for %s" % file_path)
 
             file_mode = 'rb' if six.PY3 else 'r'
             with open(file_path, file_mode) as fp:
@@ -301,7 +302,6 @@ def _write_files(s3, app, static_url_loc, static_folder, files, bucket,
                 s3.put_object(Bucket=bucket,
                               Key=key_name,
                               Body=data,
-                              ACL="public-read",
                               Metadata=metadata,
                               **params)
 
@@ -333,9 +333,7 @@ def get_setting(name, app=None):
     return app.config.get(name, default_value) if app else default_value
 
 
-def create_all(app, user=None, password=None, bucket_name=None,
-               location=None, include_hidden=False,
-               filepath_filter_regex=None, put_bucket_acl=True):
+def create_all(app, bucket_name=None, location=None, include_hidden=False, filepath_filter_regex=None):
     """
     Uploads of the static assets associated with a Flask application to
     Amazon S3.
@@ -400,45 +398,25 @@ def create_all(app, user=None, password=None, bucket_name=None,
     /latest/dev/BucketRestrictions.html
 
     """
-    user = user or app.config.get('AWS_ACCESS_KEY_ID')
-    password = password or app.config.get('AWS_SECRET_ACCESS_KEY')
     bucket_name = bucket_name or app.config.get('FLASKS3_BUCKET_NAME')
     if not bucket_name:
         raise ValueError("No bucket name provided.")
     location = location or app.config.get('FLASKS3_REGION')
-    endpoint_url = app.config.get('FLASKS3_ENDPOINT_URL')
 
     # build list of static files
-    all_files = _gather_files(app, include_hidden,
-                              filepath_filter_regex=filepath_filter_regex)
+    all_files = _gather_files(app, include_hidden, filepath_filter_regex=filepath_filter_regex)
     logger.debug("All valid files: %s" % all_files)
 
-    # connect to s3
-    s3 = boto3.client("s3",
-                      endpoint_url=endpoint_url,
-                      region_name=location or None,
-                      aws_access_key_id=user,
-                      aws_secret_access_key=password)
-
-    # get_or_create bucket
-    try:
-        s3.head_bucket(Bucket=bucket_name)
-    except ClientError as e:
-        if int(e.response['Error']['Code']) == 404:
-            # Create the bucket
-            bucket = s3.create_bucket(Bucket=bucket_name)
-        else:
-            raise
-
-    if put_bucket_acl:
-        s3.put_bucket_acl(Bucket=bucket_name, ACL='public-read')
+    # connect to s3 & verify bucket exists
+    s3 = boto3.client("s3", region_name=location or None)
+    s3.head_bucket(Bucket=bucket_name)
 
     if get_setting('FLASKS3_ONLY_MODIFIED', app):
         try:
             hashes_object = s3.get_object(Bucket=bucket_name, Key='.file-hashes')
             hashes = json.loads(str(hashes_object['Body'].read().decode()))
         except ClientError as e:
-            logger.warn("No file hashes found: %s" % e)
+            logger.warning("No file hashes found: %s" % e)
             hashes = None
 
         new_hashes = _upload_files(s3, app, all_files, bucket_name, hashes=hashes)
@@ -449,9 +427,10 @@ def create_all(app, user=None, password=None, bucket_name=None,
                           Body=json.dumps(dict(new_hashes)),
                           ACL='private')
         except boto3.exceptions.S3UploadFailedError as e:
-            logger.warn("Unable to upload file hashes: %s" % e)
+            logger.warning("Unable to upload file hashes: %s" % e)
     else:
         _upload_files(s3, app, all_files, bucket_name)
+
 
 class FlaskS3(object):
     """

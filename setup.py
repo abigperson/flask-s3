@@ -44,7 +44,6 @@ setup(
         'Boto3>=1.1.1',
         'six'
     ],
-    tests_require=['nose', 'mock'],
     classifiers=[
         'Environment :: Web Environment',
         'Intended Audience :: Developers',
@@ -53,6 +52,5 @@ setup(
         'Programming Language :: Python',
         'Topic :: Internet :: WWW/HTTP :: Dynamic Content',
         'Topic :: Software Development :: Libraries :: Python Modules'
-    ],
-    test_suite = 'nose.collector'
+    ]
 )
