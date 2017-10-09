@@ -6,3 +6,4 @@ dist
 /.idea
 _build
 venv/
+/test_flask_static.py
